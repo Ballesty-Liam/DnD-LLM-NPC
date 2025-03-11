@@ -65,7 +65,7 @@ This project demonstrates several key AI and NLP techniques:
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/radiant_citadel_npc.git
+git clone https://github.com/[YOUR_GIT_USERNAME]/radiant_citadel_npc.git
 cd radiant_citadel_npc
 ```
 
@@ -174,17 +174,11 @@ This project showcases various technical skills valuable for machine learning an
 ## Future Enhancements
 
 - Support for multiple NPCs with different personas
-- Voice output using TTS
-- Integration with VTT platforms like Roll20 or Foundry
 - Fine-tuning capabilities for custom knowledge domains
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgments
 
