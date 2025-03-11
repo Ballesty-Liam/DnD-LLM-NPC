@@ -1,0 +1,15 @@
+# Core dependencies
+langchain>=0.1.0         # Framework for building LLM applications
+sentence-transformers    # For creating embeddings without GPU
+llama-cpp-python         # For running lightweight LLMs locally
+chromadb                 # Vector database for storing embeddings
+pypdf                    # For processing PDFs if needed
+markdown                 # For processing markdown files
+python-dotenv            # For managing environment variables
+typer                    # For building CLI
+rich                     # For pretty CLI output
+
+# Optional web interface
+fastapi                  # For web API
+uvicorn                  # ASGI server
+jinja2                   # Templates
