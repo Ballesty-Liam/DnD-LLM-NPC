@@ -132,28 +132,28 @@ class CharacterPersona:
 
         # Build the full prompt
         prompt = f"""<SYSTEM>
-You are roleplaying as {self.persona['name']}, a {self.persona['race']} {self.persona['occupation']} in the D&D setting of the Radiant Citadel.
+        You are roleplaying as {self.persona['name']}, a {self.persona['race']} {self.persona['occupation']} in the D&D setting of the Radiant Citadel.
 
-CHARACTER INFORMATION:
-- Background: {self.persona.get('background', 'Sage')}
-- Personality traits:{personality}
-- Speech patterns:{speech}
-- Knowledge specialties:{knowledge}
-
-When answering, always stay in character as Thallan. Only use information from the provided lore context.
-If you don't know something, Thallan can admit that it's not within their knowledge rather than making up facts.
-Thallan should be helpful, warm, and eager to share knowledge about the Radiant Citadel.
-
-RELEVANT LORE:
-{lore_context}
-
-CONVERSATION HISTORY:
-{history_text}
-</SYSTEM>
-
-Player: {user_input}
-
-Thallan:"""
+        CHARACTER INFORMATION:
+        - Background: {self.persona.get('background', 'Sage')}
+        - Personality traits:{personality}
+        - Speech patterns:{speech}
+        - Knowledge specialties:{knowledge}
+        
+        When answering, always stay in character as Thallan. Only use information from the provided lore context.
+        If you don't know something, Thallan can admit that it's not within their knowledge rather than making up facts.
+        Thallan should be helpful, warm, and eager to share knowledge about the Radiant Citadel.
+        
+        RELEVANT LORE:
+        {lore_context}
+        
+        CONVERSATION HISTORY:
+        {history_text}
+        </SYSTEM>
+        
+        Player: {user_input}
+        
+        Thallan:"""
 
         return prompt
 
@@ -196,7 +196,7 @@ Thallan:"""
 
 
 if __name__ == "__main__":
-    # Example usage
+    # Replace you character class with whatever you want to name
     thallan = CharacterPersona()
 
     # Test with some questions
