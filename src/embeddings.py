@@ -19,7 +19,7 @@ class EmbeddingManager:
         self,
         model_name: str = "all-MiniLM-L6-v2",  # Lightweight model, works without GPU
         processed_dir: str = "data/processed",
-        collection_name: str = "radiant_citadel"
+        index_name: str = "radiant_citadel"
     ):
         """
         Initialize the embedding manager.
@@ -27,31 +27,40 @@ class EmbeddingManager:
         Args:
             model_name: Name of the sentence-transformers model to use
             processed_dir: Directory with processed text chunks
-            collection_name: Name for the ChromaDB collection
+            index_name: Name for the FAISS index
         """
         self.model_name = model_name
         self.processed_dir = Path(processed_dir)
-        self.collection_name = collection_name
+        self.index_name = index_name
 
-        # Set up embedding function
-        self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(model_name)
+        # Ensure directory exists
+        self.processed_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize ChromaDB client
-        self.client = chromadb.PersistentClient(os.path.join(processed_dir, "vectordb"))
+        # Initialize sentence transformer model
+        self.model = SentenceTransformer(model_name)
 
-        # Get or create collection
-        try:
-            self.collection = self.client.get_collection(
-                name=collection_name,
-                embedding_function=self.embedding_function
-            )
-            print(f"Loaded existing collection '{collection_name}' with {self.collection.count()} documents")
-        except:
-            self.collection = self.client.create_collection(
-                name=collection_name,
-                embedding_function=self.embedding_function
-            )
-            print(f"Created new collection '{collection_name}'")
+        # Path to save the index
+        self.index_path = self.processed_dir / f"{index_name}.faiss"
+        self.metadata_path = self.processed_dir / f"{index_name}_metadata.pkl"
+        self.documents_path = self.processed_dir / f"{index_name}_documents.pkl"
+
+        # Initialize or load index
+        if os.path.exists(self.index_path) and os.path.exists(self.metadata_path):
+            self.index = faiss.read_index(str(self.index_path))
+
+            with open(self.metadata_path, 'rb') as f:
+                self.metadata = pickle.load(f)
+
+            with open(self.documents_path, 'rb') as f:
+                self.documents = pickle.load(f)
+
+            print(f"Loaded existing index '{index_name}' with {len(self.metadata)} documents")
+        else:
+            # Create a new index
+            self.index = faiss.IndexFlatL2(self.model.get_sentence_embedding_dimension())
+            self.metadata = []
+            self.documents = []
+            print(f"Created new index '{index_name}'")
 
     def load_documents(self, file_path: str) -> List[Dict[str, Any]]:
         """
@@ -76,22 +85,35 @@ class EmbeddingManager:
         Args:
             documents: List of document dictionaries with content and metadata
         """
-        # Prepare data for ChromaDB
-        ids = [f"doc_{i}" for i in range(len(documents))]
+        # Extract texts and metadata
         texts = [doc["content"] for doc in documents]
         metadatas = [doc["metadata"] for doc in documents]
 
-        # Add to collection in batches (to avoid memory issues with large collections)
-        batch_size = 100
-        for i in range(0, len(documents), batch_size):
-            end_idx = min(i + batch_size, len(documents))
-            self.collection.add(
-                ids=ids[i:end_idx],
-                documents=texts[i:end_idx],
-                metadatas=metadatas[i:end_idx]
-            )
+        # Create embeddings
+        embeddings = self.model.encode(texts, show_progress_bar=True)
 
-        print(f"Added {len(documents)} documents to collection")
+        # Add to FAISS index
+        start_idx = len(self.metadata)
+        self.index.add(np.array(embeddings).astype('float32'))
+
+        # Store metadata and documents
+        for i, (text, meta) in enumerate(zip(texts, metadatas)):
+            self.metadata.append({
+                "id": start_idx + i,
+                "metadata": meta
+            })
+            self.documents.append(text)
+
+        # Save index and metadata
+        faiss.write_index(self.index, str(self.index_path))
+
+        with open(self.metadata_path, 'wb') as f:
+            pickle.dump(self.metadata, f)
+
+        with open(self.documents_path, 'wb') as f:
+            pickle.dump(self.documents, f)
+
+        print(f"Added {len(documents)} documents to index")
 
     def process_and_embed(self, chunks_file: str = "chunks.jsonl"):
         """
@@ -121,11 +143,37 @@ class EmbeddingManager:
         Returns:
             Dictionary with query results
         """
-        results = self.collection.query(
-            query_texts=[query_text],
-            n_results=n_results,
-            where=where_filter
-        )
+        # Encode the query
+        query_embedding = self.model.encode([query_text])[0].reshape(1, -1).astype('float32')
+
+        # Search the index
+        distances, indices = self.index.search(query_embedding, n_results)
+
+        # Prepare results
+        results = {
+            "documents": [[self.documents[idx] for idx in indices[0]]],
+            "metadatas": [[self.metadata[idx]["metadata"] for idx in indices[0]]],
+            "distances": [distances[0].tolist()]
+        }
+
+        # Apply filter if provided
+        if where_filter:
+            filtered_results = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+
+            for i, metadata in enumerate(results["metadatas"][0]):
+                # Check if metadata matches filter
+                matches = True
+                for key, value in where_filter.items():
+                    if key not in metadata or metadata[key] != value:
+                        matches = False
+                        break
+
+                if matches:
+                    filtered_results["documents"][0].append(results["documents"][0][i])
+                    filtered_results["metadatas"][0].append(metadata)
+                    filtered_results["distances"][0].append(results["distances"][0][i])
+
+            results = filtered_results
 
         return results
 

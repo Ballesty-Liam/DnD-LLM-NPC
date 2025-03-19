@@ -10,6 +10,7 @@ markdown                 # For processing markdown files
 python-dotenv            # For managing environment variables
 typer                    # For building CLI
 rich                     # For pretty CLI output
+bs4
 
 # Optional web interface
 fastapi                  # For web API

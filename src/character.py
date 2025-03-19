@@ -63,47 +63,36 @@ class CharacterPersona:
                 ]
             }
 
-        # Load or download LLM model
-        self.model_path = model_path or self._get_default_model()
+        # Initialize model
+        self.model_name = model_path or "microsoft/phi-2" # Default to a small model that runs well on CPU
 
-        # Initialize model with context window large enough for our prompts
-        self.llm = Llama(
-            model_path=self.model_path,
-            n_ctx=4096,  # Context window size
-            n_threads=4   # Adjust based on your CPU
+        # Use low precision for better performance on CPU
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            low_cpu_mem_usage=True,
+            device_map="auto"
+        )
+
+        # Create generation pipeline
+        self.llm = pipeline(
+            "text-generation",
+            model=self.model,
+            tokenizer=self.tokenizer
         )
 
         # Set up retriever
         self.retriever = LoreRetriever()
 
-    def _get_default_model(self) -> str:
-        """Get default model path, downloading if needed."""
-        # Default to a 7B parameter model that can run on CPU
-        default_path = os.path.join(
-            os.path.expanduser("~"),
-            ".cache",
-            "radiant_citadel_npc",
-            "models",
-            "phi-2.Q4_K_M.gguf"
-        )
-
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(default_path), exist_ok=True)
-
-        # Check if model exists, if not give instructions to download
-        if not os.path.exists(default_path):
-            print(f"Model not found at {default_path}")
-            print("Please download a GGUF format model file. Example options:")
-            print("- phi-2.Q4_K_M.gguf (recommended for CPU-only)")
-            print("- mistral-7b-instruct-v0.2.Q4_K_M.gguf")
-            print("- openhermes-2.5-mistral-7b.Q4_K_M.gguf")
-            print("\nDownload from: https://huggingface.co/TheBloke")
-            print(f"Save to: {default_path}")
-
-            import sys
-            sys.exit(1)
-
-        return default_path
+    def _get_available_models(self) -> List[str]:
+        """Get list of available models that work well on CPU."""
+        return [
+            "microsoft/phi-2",           # Lightweight (2.7B parameters)
+            "TinyLlama/TinyLlama-1.1B-Chat-v1.0", # Even smaller
+            "google/flan-t5-small",      # Very small but capable
+            "bigscience/bloom-560m"      # Very small BLOOM model
+        ]
 
     def _build_prompt(self, user_input: str, chat_history: List[Dict[str, str]]) -> str:
         """
@@ -132,7 +121,7 @@ class CharacterPersona:
                 history_text += f"Thallan: {turn['character']}\n\n"
 
         # Build the full prompt
-        prompt = f"""<SYSTEM>
+        prompt = f"""<s>
 You are roleplaying as {self.persona['name']}, a {self.persona['race']} {self.persona['occupation']} in the D&D setting of the Radiant Citadel.
 
 CHARACTER INFORMATION:
@@ -150,7 +139,7 @@ RELEVANT LORE:
 
 CONVERSATION HISTORY:
 {history_text}
-</SYSTEM>
+</s>
 
 Player: {user_input}
 
@@ -185,13 +174,21 @@ Thallan:"""
         # Generate response
         response = self.llm(
             prompt,
-            max_tokens=max_tokens,
+            max_new_tokens=max_tokens,
             temperature=temperature,
-            stop=["Player:", "</SYSTEM>"]
+            do_sample=True,
+            top_p=0.9,
+            num_return_sequences=1
         )
 
         # Extract just the generated text
-        generated_text = response["choices"][0]["text"].strip()
+        generated_text = response[0]['generated_text'][len(prompt):].strip()
+
+        # Clean up the text (remove any trailing "Player:" or similar markers)
+        end_markers = ["Player:", "</s>", "\n\n"]
+        for marker in end_markers:
+            if marker in generated_text:
+                generated_text = generated_text.split(marker)[0].strip()
 
         return generated_text
 
