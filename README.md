@@ -35,11 +35,7 @@ This project demonstrates several key AI and NLP techniques:
    - Templates prompts for consistent character responses
    - Combines retrieved lore with character voice
 
-4. **Inference**
-   - Uses llama-cpp-python for optimized CPU inference
-   - Supports multiple lightweight LLMs
-
-5. **User Interfaces**
+4. **User Interfaces**
    - CLI interface with rich text formatting
    - Simple web interface using FastAPI and WebSockets
 
@@ -48,8 +44,6 @@ This project demonstrates several key AI and NLP techniques:
 - **Python**: Core language
 - **LangChain**: Framework for LLM applications
 - **Sentence-Transformers**: Fast CPU-friendly embeddings
-- **ChromaDB**: Vector database
-- **Llama-cpp-python**: Optimized LLM inference
 - **FastAPI**: Web interface backend
 - **Typer/Rich**: CLI interface
 
@@ -117,28 +111,7 @@ Then open your browser to `http://localhost:8000`
 
 ### Customizing Thallan
 
-You can customize Thallan's personality by editing the persona data in `src/character.py` or by creating a custom JSON file:
-
-```json
-{
-  "name": "Thallan",
-  "race": "Half-Elf",
-  "occupation": "Scholar and guide at the Radiant Citadel",
-  "background": "Sage",
-  "personality": [
-    "Knowledgeable and scholarly",
-    "Warm and welcoming to visitors"
-  ],
-  "speech_patterns": [
-    "Uses educational metaphors",
-    "Occasionally references obscure Citadel lore"
-  ],
-  "knowledge_specialties": [
-    "Radiant Citadel history and layout",
-    "The Founders and Dawn Incarnates"
-  ]
-}
-```
+You can customize Thallan's personality by editing the persona data in `src/character.py`.
 
 ### Using in Your Campaign
 
@@ -154,7 +127,6 @@ This project showcases various technical skills valuable for machine learning an
 - Clean, modular code structure 
 - Proper packaging and project organization
 - Command-line and web interfaces
-- Comprehensive documentation
 
 ### Machine Learning & NLP
 - Text embeddings and vector search
@@ -167,9 +139,6 @@ This project showcases various technical skills valuable for machine learning an
 - Metadata extraction and management
 - Vector database implementation
 
-### UI/UX
-- Interactive CLI with rich formatting
-- Responsive web interface with WebSockets
 
 ## Future Enhancements
 

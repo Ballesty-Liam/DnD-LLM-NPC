@@ -3,13 +3,11 @@ Web interface for interacting with Thallan NPC.
 """
 import os
 import sys
-import json
-from typing import List, Dict, Optional
+from typing import Dict
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
@@ -17,8 +15,7 @@ import uvicorn
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.character import CharacterPersona
-from src.data_processing import SourceProcessor
-from src.embeddings import EmbeddingManager
+
 
 # Initialize FastAPI app
 app = FastAPI(title="Thallan - Radiant Citadel NPC")
