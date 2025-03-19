@@ -6,7 +6,8 @@ from typing import Dict, List, Any, Optional
 import json
 from pathlib import Path
 
-from llama_cpp import Llama
+import torch
+from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
 
 from .retrieval import LoreRetriever
 
@@ -15,10 +16,10 @@ class CharacterPersona:
     """Define a D&D NPC's personality and knowledge."""
 
     def __init__(
-            self,
-            name: str = "Thallan",
-            persona_file: Optional[str] = None,
-            model_path: Optional[str] = None
+        self,
+        name: str = "Thallan",
+        persona_file: Optional[str] = None,
+        model_path: Optional[str] = None
     ):
         """
         Initialize the character persona.
@@ -69,7 +70,7 @@ class CharacterPersona:
         self.llm = Llama(
             model_path=self.model_path,
             n_ctx=4096,  # Context window size
-            n_threads=4  # Adjust based on your CPU
+            n_threads=4   # Adjust based on your CPU
         )
 
         # Set up retriever
@@ -132,37 +133,37 @@ class CharacterPersona:
 
         # Build the full prompt
         prompt = f"""<SYSTEM>
-        You are roleplaying as {self.persona['name']}, a {self.persona['race']} {self.persona['occupation']} in the D&D setting of the Radiant Citadel.
+You are roleplaying as {self.persona['name']}, a {self.persona['race']} {self.persona['occupation']} in the D&D setting of the Radiant Citadel.
 
-        CHARACTER INFORMATION:
-        - Background: {self.persona.get('background', 'Sage')}
-        - Personality traits:{personality}
-        - Speech patterns:{speech}
-        - Knowledge specialties:{knowledge}
-        
-        When answering, always stay in character as Thallan. Only use information from the provided lore context.
-        If you don't know something, Thallan can admit that it's not within their knowledge rather than making up facts.
-        Thallan should be helpful, warm, and eager to share knowledge about the Radiant Citadel.
-        
-        RELEVANT LORE:
-        {lore_context}
-        
-        CONVERSATION HISTORY:
-        {history_text}
-        </SYSTEM>
-        
-        Player: {user_input}
-        
-        Thallan:"""
+CHARACTER INFORMATION:
+- Background: {self.persona.get('background', 'Sage')}
+- Personality traits:{personality}
+- Speech patterns:{speech}
+- Knowledge specialties:{knowledge}
+
+When answering, always stay in character as Thallan. Only use information from the provided lore context.
+If you don't know something, Thallan can admit that it's not within their knowledge rather than making up facts.
+Thallan should be helpful, warm, and eager to share knowledge about the Radiant Citadel.
+
+RELEVANT LORE:
+{lore_context}
+
+CONVERSATION HISTORY:
+{history_text}
+</SYSTEM>
+
+Player: {user_input}
+
+Thallan:"""
 
         return prompt
 
     def generate_response(
-            self,
-            user_input: str,
-            chat_history: Optional[List[Dict[str, str]]] = None,
-            max_tokens: int = 512,
-            temperature: float = 0.7
+        self,
+        user_input: str,
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        max_tokens: int = 512,
+        temperature: float = 0.7
     ) -> str:
         """
         Generate an in-character response to user input.
@@ -196,7 +197,7 @@ class CharacterPersona:
 
 
 if __name__ == "__main__":
-    # Replace you character class with whatever you want to name
+    # Example usage
     thallan = CharacterPersona()
 
     # Test with some questions

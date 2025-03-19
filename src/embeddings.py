@@ -3,23 +3,23 @@ Generate and manage embeddings for D&D source material.
 """
 import os
 import json
+import pickle
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 
 import numpy as np
+import faiss
 from sentence_transformers import SentenceTransformer
-import chromadb
-from chromadb.utils import embedding_functions
 
 
 class EmbeddingManager:
     """Manage text embeddings for efficient retrieval."""
 
     def __init__(
-            self,
-            model_name: str = "all-MiniLM-L6-v2",  # Lightweight model, works without GPU
-            processed_dir: str = "data/processed",
-            collection_name: str = "radiant_citadel"
+        self,
+        model_name: str = "all-MiniLM-L6-v2",  # Lightweight model, works without GPU
+        processed_dir: str = "data/processed",
+        collection_name: str = "radiant_citadel"
     ):
         """
         Initialize the embedding manager.
@@ -105,10 +105,10 @@ class EmbeddingManager:
         self.add_documents(documents)
 
     def query(
-            self,
-            query_text: str,
-            n_results: int = 5,
-            where_filter: Optional[Dict[str, Any]] = None
+        self,
+        query_text: str,
+        n_results: int = 5,
+        where_filter: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Query the vector database to find relevant passages.
@@ -138,5 +138,5 @@ if __name__ == "__main__":
     # Test query
     results = manager.query("Tell me about the Radiant Citadel")
     for i, doc in enumerate(results["documents"][0]):
-        print(f"Result {i + 1}:")
+        print(f"Result {i+1}:")
         print(doc[:100] + "...\n")

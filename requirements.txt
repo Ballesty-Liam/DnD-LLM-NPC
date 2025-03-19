@@ -1,8 +1,10 @@
 # Core dependencies
 langchain>=0.1.0         # Framework for building LLM applications
 sentence-transformers    # For creating embeddings without GPU
-llama-cpp-python         # For running lightweight LLMs locally
-chromadb                 # Vector database for storing embeddings
+transformers             # Hugging Face Transformers for model inference
+faiss-cpu                # Vector database for storing embeddings (CPU version)
+accelerate               # For optimized inference
+torch                    # PyTorch (required by transformers)
 pypdf                    # For processing PDFs if needed
 markdown                 # For processing markdown files
 python-dotenv            # For managing environment variables
