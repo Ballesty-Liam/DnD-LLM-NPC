@@ -83,7 +83,8 @@ class CharacterPersona:
         persona_file: Optional[str] = None,
         model_path: Optional[str] = None,
         force_gpu: bool = True,
-        strict_knowledge: bool = True
+        strict_knowledge: bool = True,
+        verbose: bool = False
     ):
         """
         Initialize the character persona.
@@ -94,9 +95,11 @@ class CharacterPersona:
             model_path: Path to LLM model or model identifier
             force_gpu: Whether to force GPU usage
             strict_knowledge: Whether to strictly enforce knowledge limits
+            verbose: Whether to print detailed diagnostic information
         """
         self.name = name
         self.strict_knowledge = strict_knowledge
+        self.verbose = verbose
 
         # Load persona data
         if persona_file and os.path.exists(persona_file):
@@ -129,11 +132,13 @@ class CharacterPersona:
 
         # Get optimal device for inference
         self.device = get_optimal_device()
-        print(f"Using device: {self.device}")
+        if self.verbose:
+            print(f"Using device: {self.device}")
 
         # Force GPU if available and requested
         if force_gpu and torch.cuda.is_available():
-            print("GPU acceleration enabled")
+            if self.verbose:
+                print("GPU acceleration enabled")
             torch.cuda.empty_cache()  # Clear GPU memory
 
         # Initialize model
@@ -145,7 +150,8 @@ class CharacterPersona:
             # Try to use 4-bit quantization
             try:
                 import bitsandbytes as bnb
-                print(f"Using bitsandbytes for quantization (version {bnb.__version__})")
+                if self.verbose:
+                    print(f"Using bitsandbytes for quantization (version {bnb.__version__})")
                 quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.float16,
@@ -153,9 +159,11 @@ class CharacterPersona:
                     bnb_4bit_use_double_quant=True
                 )
             except ImportError:
-                print("bitsandbytes not available, using 16-bit precision instead")
+                if self.verbose:
+                    print("bitsandbytes not available, using 16-bit precision instead")
 
-        print(f"Loading model: {self.model_name}")
+        if self.verbose:
+            print(f"Loading model: {self.model_name}")
 
         # Special handling for OpenLLaMA models
         if "open_llama" in self.model_name.lower():
@@ -167,11 +175,13 @@ class CharacterPersona:
                 )
                 self.model = result["model"]
                 self.tokenizer = result["tokenizer"]
-                print("Successfully loaded OpenLLaMA model and tokenizer")
+                if self.verbose:
+                    print("Successfully loaded OpenLLaMA model and tokenizer")
 
             except Exception as e:
-                print(f"Error loading OpenLLaMA model: {e}")
-                print("Falling back to microsoft/phi-2 model which has better compatibility")
+                if self.verbose:
+                    print(f"Error loading OpenLLaMA model: {e}")
+                    print("Falling back to microsoft/phi-2 model which has better compatibility")
                 self.model_name = "microsoft/phi-2"
 
                 # Load standard tokenizer and model
@@ -198,7 +208,8 @@ class CharacterPersona:
                 if self.tokenizer.pad_token is None:
                     self.tokenizer.pad_token = self.tokenizer.eos_token
 
-                print("Successfully loaded tokenizer")
+                if self.verbose:
+                    print("Successfully loaded tokenizer")
 
                 # Load model with GPU acceleration via device_map="auto"
                 self.model = AutoModelForCausalLM.from_pretrained(
@@ -211,8 +222,9 @@ class CharacterPersona:
                 )
 
             except Exception as e:
-                print(f"Error loading model: {e}")
-                print("Falling back to microsoft/phi-2 model which has better compatibility")
+                if self.verbose:
+                    print(f"Error loading model: {e}")
+                    print("Falling back to microsoft/phi-2 model which has better compatibility")
                 self.model_name = "microsoft/phi-2"
                 self.tokenizer = AutoTokenizer.from_pretrained(
                     self.model_name,
@@ -229,7 +241,7 @@ class CharacterPersona:
                 )
 
         # Check if model is using GPU
-        if self.device.type == "cuda":
+        if self.device.type == "cuda" and self.verbose:
             # Check if any parameter is on CUDA
             is_on_gpu = any(p.is_cuda for p in self.model.parameters())
             if is_on_gpu:
@@ -238,8 +250,9 @@ class CharacterPersona:
                 print("Warning: Model parameters not on GPU despite CUDA being available")
 
         # Get parameter count
-        param_count = sum(p.numel() for p in self.model.parameters())
-        print(f"Parameter count: {param_count/1e9:.2f} billion")
+        if self.verbose:
+            param_count = sum(p.numel() for p in self.model.parameters())
+            print(f"Parameter count: {param_count/1e9:.2f} billion")
 
         # Create text generation pipeline WITHOUT specifying device (let accelerate handle it)
         try:
@@ -248,9 +261,11 @@ class CharacterPersona:
                 tokenizer=self.tokenizer,
                 return_full_text=False
             )
-            print("Successfully created text generation pipeline")
+            if self.verbose:
+                print("Successfully created text generation pipeline")
         except Exception as e:
-            print(f"Error creating pipeline: {e}")
+            if self.verbose:
+                print(f"Error creating pipeline: {e}")
             # Try an alternative approach
             self.llm = TextGenerationPipeline(
                 model=self.model,
@@ -340,7 +355,7 @@ class CharacterPersona:
         # Allow a small percentage of ungrounded entities (common words might be false positives)
         is_grounded = ungrounded_ratio <= 0.3
 
-        if not is_grounded:
+        if not is_grounded and self.verbose:
             print(f"Response contains ungrounded entities: {ungrounded_entities}")
 
         return is_grounded
@@ -358,7 +373,7 @@ class CharacterPersona:
             Dictionary with prompt text and relevant context
         """
         # Retrieve relevant lore with more results for better coverage
-        lore_context = self.retriever.get_condensed_context(user_input, detailed=True)
+        lore_context = self.retriever.get_condensed_context(user_input, detailed=True, verbose=self.verbose)
 
         # Format character description
         personality = "\n- ".join([""] + self.persona.get("personality", []))
@@ -455,8 +470,8 @@ CONVERSATION HISTORY:
         prompt = prompt_data["prompt"]
         context = prompt_data["context"]
 
-        # Log GPU info if available
-        if torch.cuda.is_available():
+        # Log GPU info if available and verbose mode is on
+        if torch.cuda.is_available() and self.verbose:
             print(f"GPU memory before generation: {torch.cuda.memory_allocated()/1e9:.2f} GB")
 
         # Generate response
@@ -474,8 +489,8 @@ CONVERSATION HISTORY:
                 num_return_sequences=1
             )
 
-            # Log GPU info if available
-            if torch.cuda.is_available():
+            # Log GPU info if available and verbose mode is on
+            if torch.cuda.is_available() and self.verbose:
                 print(f"GPU memory after generation: {torch.cuda.memory_allocated()/1e9:.2f} GB")
 
             # Extract generated text
@@ -491,13 +506,15 @@ CONVERSATION HISTORY:
             if self.strict_knowledge:
                 # If response contains hallucinated information, replace with uncertainty response
                 if not self._is_response_grounded(generated_text, context):
-                    print("Detected potential hallucination - replacing response")
+                    if self.verbose:
+                        print("Detected potential hallucination - replacing response")
                     return self._get_uncertainty_response()
 
             return generated_text
 
         except Exception as e:
-            print(f"Error during generation: {e}")
+            if self.verbose:
+                print(f"Error during generation: {e}")
             return "I apologize, traveler. My thoughts seem muddled at the moment. Could you perhaps phrase your question differently?"
 
 

@@ -39,6 +39,9 @@ app = typer.Typer()
 chat_history: List[Dict[str, str]] = []
 character: Optional[CharacterPersona] = None
 
+# Development mode for debugging
+DEV_MODE = False
+
 
 @app.command("process")
 def process_source_material(
@@ -152,6 +155,17 @@ def gpu_info():
     console.print(f"CUDA version: {torch.version.cuda}")
 
 
+@app.command("dev-mode")
+def toggle_dev_mode(enable: bool = True):
+    """Enable or disable development mode with verbose output."""
+    global DEV_MODE
+    DEV_MODE = enable
+    if enable:
+        console.print("[system]Development mode enabled - verbose diagnostic output will be shown[/system]")
+    else:
+        console.print("[system]Development mode disabled - diagnostic output suppressed[/system]")
+
+
 @app.command("chat")
 def chat_with_npc(
         model_path: str = typer.Option("microsoft/phi-2", help="Path or name of LLM model"),
@@ -159,13 +173,17 @@ def chat_with_npc(
         save_history: bool = typer.Option(True, help="Save chat history to file"),
         history_file: str = typer.Option("chat_history.json", help="File to save chat history"),
         force_gpu: bool = typer.Option(False, help="Force GPU acceleration"),
-        strict_knowledge: bool = typer.Option(True, help="Strictly enforce knowledge limitations")
+        strict_knowledge: bool = typer.Option(True, help="Strictly enforce knowledge limitations"),
+        dev_mode: bool = typer.Option(False, help="Enable development mode with verbose output")
 ):
     """Interactive chat with Thallan, the Radiant Citadel NPC."""
-    global character, chat_history
+    global character, chat_history, DEV_MODE
+
+    # Update dev mode from parameter
+    DEV_MODE = dev_mode
 
     # Show GPU info if forcing GPU
-    if force_gpu:
+    if force_gpu and DEV_MODE:
         if torch.cuda.is_available():
             console.print(f"[system]GPU acceleration enabled: {torch.cuda.get_device_name(0)}[/system]")
             # Clear CUDA cache
@@ -177,21 +195,23 @@ def chat_with_npc(
             console.print("[system]pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121[/system]")
             return
 
-    # Show anti-hallucination status
-    if strict_knowledge:
-        console.print("[system]Anti-hallucination system enabled - Thallan will only use information from the source material[/system]")
-    else:
-        console.print("[system]WARNING: Anti-hallucination system disabled - Thallan may invent information not in source material[/system]")
+    # Show anti-hallucination status in dev mode
+    if DEV_MODE:
+        if strict_knowledge:
+            console.print("[system]Anti-hallucination system enabled - Thallan will only use information from the source material[/system]")
+        else:
+            console.print("[system]WARNING: Anti-hallucination system disabled - Thallan may invent information not in source material[/system]")
 
     # Initialize character
-    console.print(f"[system]Initializing Thallan with model {model_path}...[/system]")
+    console.print(f"[system]Initializing Thallan...[/system]")
     try:
         character = CharacterPersona(
             name="Thallan",
             persona_file=persona_file,
             model_path=model_path,
             force_gpu=force_gpu,
-            strict_knowledge=strict_knowledge
+            strict_knowledge=strict_knowledge,
+            verbose=DEV_MODE
         )
     except Exception as e:
         console.print(f"[error]Error initializing model: {e}[/error]")
@@ -203,7 +223,8 @@ def chat_with_npc(
         try:
             with open(history_file, 'r', encoding='utf-8') as f:
                 chat_history = json.load(f)
-            console.print(f"[system]Loaded {len(chat_history)} previous chat messages[/system]")
+            if DEV_MODE:
+                console.print(f"[system]Loaded {len(chat_history)} previous chat messages[/system]")
         except Exception as e:
             console.print(f"[error]Error loading chat history: {e}[/error]")
 
@@ -225,7 +246,7 @@ def chat_with_npc(
                 console.print("[npc]Farewell, traveler! May the light of the Citadel guide your path.[/npc]")
                 break
 
-            # Add commands for controlling the anti-hallucination system
+            # Add commands for controlling the anti-hallucination system and dev mode
             if user_input.lower() == "/strict on":
                 character.strict_knowledge = True
                 console.print("[system]Anti-hallucination system enabled[/system]")
@@ -236,10 +257,24 @@ def chat_with_npc(
                 console.print("[system]Anti-hallucination system disabled[/system]")
                 continue
 
+            if user_input.lower() == "/dev on":
+                DEV_MODE = True
+                character.verbose = True
+                console.print("[system]Development mode enabled - verbose output will be shown[/system]")
+                continue
+
+            if user_input.lower() == "/dev off":
+                DEV_MODE = False
+                character.verbose = False
+                console.print("[system]Development mode disabled - verbose output suppressed[/system]")
+                continue
+
             if user_input.lower() == "/help":
                 console.print("[system]Available commands:[/system]")
                 console.print("[system]  /strict on - Enable anti-hallucination system[/system]")
                 console.print("[system]  /strict off - Disable anti-hallucination system[/system]")
+                console.print("[system]  /dev on - Enable development mode with diagnostic output[/system]")
+                console.print("[system]  /dev off - Disable development mode[/system]")
                 console.print("[system]  /quit or /exit - End the conversation[/system]")
                 console.print("[system]  /help - Show this help message[/system]")
                 continue

@@ -70,13 +70,14 @@ class LoreRetriever:
         n_results = n_results or self.results_count
         return self.embedding_manager.query(query_text, n_results=n_results)
 
-    def get_condensed_context(self, query_text: str, detailed: bool = False) -> str:
+    def get_condensed_context(self, query_text: str, detailed: bool = False, verbose: bool = False) -> str:
         """
         Get a condensed context from multiple relevant chunks.
 
         Args:
             query_text: The query text
             detailed: Whether to include more detailed results
+            verbose: Whether to print diagnostic information
 
         Returns:
             Condensed context text
@@ -85,7 +86,7 @@ class LoreRetriever:
         n_results = self.results_count * 2 if detailed else self.results_count
 
         # Expand query with related terms to improve retrieval
-        expanded_query = self._expand_query(query_text)
+        expanded_query = self._expand_query(query_text, verbose)
 
         # Get results for both original and expanded queries
         original_results = self.query_lore(query_text, n_results)
@@ -124,12 +125,13 @@ class LoreRetriever:
 
         return "\n\n".join(context_sections)
 
-    def _expand_query(self, query_text: str) -> str:
+    def _expand_query(self, query_text: str, verbose: bool = False) -> str:
         """
         Expand query with D&D related terms to improve retrieval.
 
         Args:
             query_text: Original query text
+            verbose: Whether to print diagnostic information
 
         Returns:
             Expanded query text
@@ -153,7 +155,8 @@ class LoreRetriever:
         # Only add expansion if we found relevant terms
         if dnd_terms:
             expanded = f"{query_text} {' '.join(dnd_terms)}"
-            print(f"Expanded query: {expanded}")
+            if verbose:
+                print(f"Expanded query: {expanded}")
             return expanded
 
         return query_text
