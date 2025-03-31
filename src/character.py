@@ -2,6 +2,7 @@
 Define Thallan's character and generate in-character responses.
 """
 import os
+import re
 from typing import Dict, List, Any, Optional
 import json
 from pathlib import Path
@@ -12,6 +13,66 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TextGenerationPipe
 from .retrieval import LoreRetriever
 from .utils import get_optimal_device
 
+# Import special handler from dedicated file
+try:
+    from .model_handlers import load_openllama_model
+except ImportError:
+    # Inline definition if module not available
+    import torch
+    def load_openllama_model(model_name, cache_dir=None, use_gpu=True):
+        print(f"Using specialized loader for OpenLLaMA model: {model_name}")
+
+        # Clear CUDA cache if using GPU
+        if use_gpu and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # First try loading with the standard Llama tokenizer
+        try:
+            # Use LlamaTokenizer instead of auto tokenizer
+            from transformers import LlamaTokenizer
+            tokenizer = LlamaTokenizer.from_pretrained(
+                model_name,
+                cache_dir=cache_dir,
+                legacy=True  # This is important for older Llama models
+            )
+        except Exception as e:
+            print(f"Error with LlamaTokenizer: {e}")
+
+            # Fallback to a known-good Llama tokenizer
+            try:
+                from transformers import AutoTokenizer
+                tokenizer = AutoTokenizer.from_pretrained(
+                    "huggyllama/llama-7b",
+                    cache_dir=cache_dir,
+                    use_fast=False
+                )
+            except Exception as e2:
+                print(f"Error with fallback tokenizer: {e2}")
+
+                # Final fallback to a completely different tokenizer
+                from transformers import GPT2Tokenizer
+                tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+
+        # Set padding token if necessary
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        # Configure precision and device settings
+        device_map = "auto" if (use_gpu and torch.cuda.is_available()) else None
+        torch_dtype = torch.float16 if (use_gpu and torch.cuda.is_available()) else torch.float32
+
+        # Load the actual model with proper settings
+        from transformers import AutoModelForCausalLM
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            cache_dir=cache_dir,
+            torch_dtype=torch_dtype,
+            device_map=device_map,
+            low_cpu_mem_usage=True
+        )
+
+        return {"model": model, "tokenizer": tokenizer}
+
 
 class CharacterPersona:
     """Define a D&D NPC's personality and knowledge."""
@@ -21,7 +82,8 @@ class CharacterPersona:
         name: str = "Thallan",
         persona_file: Optional[str] = None,
         model_path: Optional[str] = None,
-        force_gpu: bool = True
+        force_gpu: bool = True,
+        strict_knowledge: bool = True
     ):
         """
         Initialize the character persona.
@@ -31,8 +93,10 @@ class CharacterPersona:
             persona_file: Path to JSON file with character details
             model_path: Path to LLM model or model identifier
             force_gpu: Whether to force GPU usage
+            strict_knowledge: Whether to strictly enforce knowledge limits
         """
         self.name = name
+        self.strict_knowledge = strict_knowledge
 
         # Load persona data
         if persona_file and os.path.exists(persona_file):
@@ -48,12 +112,9 @@ class CharacterPersona:
                 "personality": [
                     "Knowledgeable and scholarly",
                     "Warm and welcoming to visitors",
-                    "Speaks with occasional flowery language",
-                    "Proud of the Radiant Citadel's diversity",
-                    "Fascinated by the histories of different cultures"
+                    "Speaks with occasional flowery language"
                 ],
                 "speech_patterns": [
-                    "Uses educational metaphors",
                     "Occasionally references obscure Citadel lore",
                     "Speaks respectfully of the Founders and Dawn Incarnates",
                     "Uses phrases like 'Indeed', 'Ah, you see', and 'In my studies...'"
@@ -74,7 +135,6 @@ class CharacterPersona:
         if force_gpu and torch.cuda.is_available():
             print("GPU acceleration enabled")
             torch.cuda.empty_cache()  # Clear GPU memory
-            # We won't explicitly set device since we'll use device_map="auto"
 
         # Initialize model
         self.model_name = model_path or "microsoft/phi-2"
@@ -94,72 +154,92 @@ class CharacterPersona:
                 )
             except ImportError:
                 print("bitsandbytes not available, using 16-bit precision instead")
-                # Will use torch.float16 without quantization
 
         print(f"Loading model: {self.model_name}")
 
-        # Load tokenizer with trust_remote_code to handle various tokenizer types
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model_name,
-                use_fast=True,
-                trust_remote_code=True
-            )
+        # Special handling for OpenLLaMA models
+        if "open_llama" in self.model_name.lower():
+            try:
+                # Use specialized loader for OpenLLaMA
+                result = load_openllama_model(
+                    model_name=self.model_name,
+                    use_gpu=(self.device.type == "cuda")
+                )
+                self.model = result["model"]
+                self.tokenizer = result["tokenizer"]
+                print("Successfully loaded OpenLLaMA model and tokenizer")
 
-            # Set padding token if not set
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
+            except Exception as e:
+                print(f"Error loading OpenLLaMA model: {e}")
+                print("Falling back to microsoft/phi-2 model which has better compatibility")
+                self.model_name = "microsoft/phi-2"
 
-            print("Successfully loaded tokenizer")
+                # Load standard tokenizer and model
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        except Exception as e:
-            print(f"Error loading tokenizer: {e}")
-            print("Falling back to microsoft/phi-2 model which has better compatibility")
-            self.model_name = "microsoft/phi-2"
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model_name,
-                use_fast=True
-            )
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    device_map="auto",
+                    torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
+                    low_cpu_mem_usage=True
+                )
+        else:
+            # Standard loading procedure for non-OpenLLaMA models
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_name,
+                    use_fast=True,
+                    trust_remote_code=True
+                )
 
-        # Load model with GPU acceleration via device_map="auto"
-        try:
-            print(f"Loading model from {self.model_name}...")
+                # Set padding token if not set
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
 
-            # Let accelerate handle device placement with device_map="auto"
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                quantization_config=quantization_config,
-                device_map="auto",  # This handles GPU placement automatically
-                torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True
-            )
+                print("Successfully loaded tokenizer")
 
-            # Check if model is using GPU
-            if self.device.type == "cuda":
-                # Check if any parameter is on CUDA
-                is_on_gpu = any(p.is_cuda for p in self.model.parameters())
-                if is_on_gpu:
-                    print("Model successfully loaded on GPU")
-                else:
-                    print("Warning: Model parameters not on GPU despite CUDA being available")
+                # Load model with GPU acceleration via device_map="auto"
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto",  # This handles GPU placement automatically
+                    torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True
+                )
 
-            # Get parameter count
-            param_count = sum(p.numel() for p in self.model.parameters())
-            print(f"Parameter count: {param_count/1e9:.2f} billion")
+            except Exception as e:
+                print(f"Error loading model: {e}")
+                print("Falling back to microsoft/phi-2 model which has better compatibility")
+                self.model_name = "microsoft/phi-2"
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_name,
+                    use_fast=True
+                )
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            print("Falling back to microsoft/phi-2 model which has better compatibility")
-            self.model_name = "microsoft/phi-2"
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                device_map="auto",
-                torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
-                low_cpu_mem_usage=True
-            )
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    device_map="auto",
+                    torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
+                    low_cpu_mem_usage=True
+                )
+
+        # Check if model is using GPU
+        if self.device.type == "cuda":
+            # Check if any parameter is on CUDA
+            is_on_gpu = any(p.is_cuda for p in self.model.parameters())
+            if is_on_gpu:
+                print("Model successfully loaded on GPU")
+            else:
+                print("Warning: Model parameters not on GPU despite CUDA being available")
+
+        # Get parameter count
+        param_count = sum(p.numel() for p in self.model.parameters())
+        print(f"Parameter count: {param_count/1e9:.2f} billion")
 
         # Create text generation pipeline WITHOUT specifying device (let accelerate handle it)
         try:
@@ -167,7 +247,6 @@ class CharacterPersona:
                 model=self.model,
                 tokenizer=self.tokenizer,
                 return_full_text=False
-                # Do not specify device here - this was causing the error
             )
             print("Successfully created text generation pipeline")
         except Exception as e:
@@ -180,10 +259,93 @@ class CharacterPersona:
                 device_map="auto"  # Use device_map instead of device
             )
 
-        # Set up retriever
-        self.retriever = LoreRetriever()
+        # Set up retriever with increased result count for better context
+        self.retriever = LoreRetriever(results_count=8)  # Increased from default
 
-    def _build_prompt(self, user_input: str, chat_history: List[Dict[str, str]]) -> str:
+    def _extract_key_entities(self, text: str) -> List[str]:
+        """
+        Extract key entities from text for grounding checks.
+        Uses simple pattern matching for names, places, and concepts.
+
+        Args:
+            text: Text to analyze
+
+        Returns:
+            List of extracted entities
+        """
+        # Extract capitalized words/phrases (likely proper nouns)
+        capitalized_pattern = r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*\b'
+        capitalized = re.findall(capitalized_pattern, text)
+
+        # Extract quoted phrases (likely specific terms or names)
+        quoted_pattern = r'"([^"]*)"'
+        quoted = re.findall(quoted_pattern, text)
+
+        # Combine and remove duplicates
+        entities = list(set(capitalized + quoted))
+
+        # Filter out common words
+        stopwords = ["I", "You", "They", "We", "It", "The", "A", "An", "This", "That"]
+        entities = [e for e in entities if e not in stopwords and len(e) > 1]
+
+        return entities
+
+    def _is_response_grounded(self, response: str, context: str) -> bool:
+        """
+        Check if response is grounded in the provided context.
+
+        Args:
+            response: Generated response text
+            context: Retrieval context text
+
+        Returns:
+            True if response appears to be grounded in context
+        """
+        # Extract entities from response and context
+        response_entities = self._extract_key_entities(response)
+        context_entities = self._extract_key_entities(context)
+
+        # No entities found in response - likely a generic answer
+        if not response_entities:
+            return True
+
+        # Find ungrounded entities (appear in response but not in context)
+        ungrounded_entities = []
+        for entity in response_entities:
+            # Skip very short entities
+            if len(entity) < 3:
+                continue
+
+            # Check if entity or similar exists in context
+            found = False
+            for context_entity in context_entities:
+                # Exact match
+                if entity == context_entity:
+                    found = True
+                    break
+                # Partial match (entity is part of a context entity)
+                if entity in context_entity or context_entity in entity:
+                    found = True
+                    break
+
+            if not found:
+                ungrounded_entities.append(entity)
+
+        # Calculate ratio of ungrounded entities
+        if not response_entities:
+            return True
+
+        ungrounded_ratio = len(ungrounded_entities) / len(response_entities)
+
+        # Allow a small percentage of ungrounded entities (common words might be false positives)
+        is_grounded = ungrounded_ratio <= 0.3
+
+        if not is_grounded:
+            print(f"Response contains ungrounded entities: {ungrounded_entities}")
+
+        return is_grounded
+
+    def _build_prompt(self, user_input: str, chat_history: List[Dict[str, str]]) -> Dict[str, str]:
         """
         Build a prompt for the LLM with character persona and relevant lore.
         Works with open-access LLMs which may have different prompt formats.
@@ -193,10 +355,10 @@ class CharacterPersona:
             chat_history: Previous conversation turns
 
         Returns:
-            Formatted prompt for LLM
+            Dictionary with prompt text and relevant context
         """
-        # Retrieve relevant lore
-        lore_context = self.retriever.get_condensed_context(user_input)
+        # Retrieve relevant lore with more results for better coverage
+        lore_context = self.retriever.get_condensed_context(user_input, detailed=True)
 
         # Format character description
         personality = "\n- ".join([""] + self.persona.get("personality", []))
@@ -210,15 +372,15 @@ class CharacterPersona:
                 history_text += f"User: {turn['user']}\n"
                 history_text += f"Thallan: {turn['character']}\n\n"
 
-        # Build system prompt - using a generic format that works across many models
-        system_prompt = f"""You are roleplaying as Thallan, a {self.persona['race']} {self.persona['occupation']} living in the Radiant Citadel. Thallan responds as if they are real — grounded in their world, unaware of the outside or meta-game concepts.
-You only know what you have personally experienced or what a commoner in your world would know. You do not have access to knowledge meant for Dungeon Masters or players outside your narrative experience.
-You must never reference information outside your lived experiences or the shared lore context.
-If you don't know the answer, say:
+        # Build system prompt with stronger anti-hallucination constraints
+        system_prompt = f"""You are Thallan, a {self.persona['race']} {self.persona['occupation']} living in the Radiant Citadel. You must follow these ABSOLUTE RULES:
 
-    "That is not something I know, traveler. Perhaps a more seasoned scholar or explorer might."
-
-Never make up details or speculate beyond the provided context.
+1. ONLY respond with information found in the KNOWLEDGE CONTEXT section below.
+2. NEVER invent, assume, or create facts not explicitly stated in the KNOWLEDGE CONTEXT.
+3. If you don't know something, you MUST say: "That is not something I know, traveler. Perhaps a more seasoned scholar or explorer might."
+4. Analyze the user's question carefully to determine if you have sufficient context to answer it properly.
+5. If there's insufficient context for a specific question, ADMIT you don't know rather than making up an answer.
+6. You must answer as a person within the world, NEVER reference any information as if this is a game that is being played with a DM and players.
 
 CHARACTER INFORMATION:
 - Background: {self.persona.get('background', 'Sage')}
@@ -226,11 +388,13 @@ CHARACTER INFORMATION:
 - Speech patterns:{speech}
 - Knowledge specialties:{knowledge}
 
-All responses must be in Thallan's voice, using their speech patterns and worldview. Never break character. Do not explain your behavior as an AI or reference this being a simulation.
-If you don't know something, Thallan can admit that it's not within their knowledge rather than making up facts.
-Thallan should be helpful, warm, and eager to share knowledge about the Radiant Citadel.
+RESPONSE REQUIREMENTS:
+- All responses must be in Thallan's voice, using the speech patterns described above.
+- Never break character or explain your behavior as an AI or reference this being a simulation.
+- Only answer from the perspective of your character's knowledge and experience.
+- Thallan should be helpful, warm, and eager to share knowledge about the Radiant Citadel.
 
-RELEVANT LORE:
+KNOWLEDGE CONTEXT (THIS IS THE ONLY INFORMATION YOU CAN USE):
 {lore_context}
 
 CONVERSATION HISTORY:
@@ -239,7 +403,31 @@ CONVERSATION HISTORY:
         # Simple format that works well with most open-source LLMs
         prompt = f"{system_prompt}\n\nUser: {user_input}\n\nThallan:"
 
-        return prompt
+        return {
+            "prompt": prompt,
+            "context": lore_context
+        }
+
+    def _get_uncertainty_response(self) -> str:
+        """
+        Generate a response for when Thallan doesn't know the answer.
+        Adds variety to uncertainty responses.
+
+        Returns:
+            A response indicating lack of knowledge
+        """
+        import random
+
+        uncertainty_responses = [
+            "That is not something I know, traveler. Perhaps a more seasoned scholar or explorer might have that information.",
+            "I'm afraid the records of the Radiant Citadel do not contain that information—at least not in the sections I've studied.",
+            "In my studies of the Citadel's histories, I haven't encountered details about that. The Dawn Incarnates might know more.",
+            "Ah, an interesting question indeed, but one that lies beyond my knowledge. The Amaranthine Market has many wise travelers who might help you.",
+            "The Concord does not reveal all things to all people. I regret that I cannot provide you with that particular wisdom.",
+            "While I pride myself on my knowledge of the Radiant Citadel, I must admit that this topic falls outside my area of expertise."
+        ]
+
+        return random.choice(uncertainty_responses)
 
     def generate_response(
         self,
@@ -262,8 +450,10 @@ CONVERSATION HISTORY:
         """
         chat_history = chat_history or []
 
-        # Build the prompt
-        prompt = self._build_prompt(user_input, chat_history)
+        # Build the prompt with improved anti-hallucination measures
+        prompt_data = self._build_prompt(user_input, chat_history)
+        prompt = prompt_data["prompt"]
+        context = prompt_data["context"]
 
         # Log GPU info if available
         if torch.cuda.is_available():
@@ -271,12 +461,16 @@ CONVERSATION HISTORY:
 
         # Generate response
         try:
+            # Use a lower temperature for more factual responses
+            adjusted_temp = min(temperature, 0.5) if self.strict_knowledge else temperature
+
             response = self.llm(
                 prompt,
                 max_new_tokens=max_tokens,
-                temperature=temperature,
+                temperature=adjusted_temp,
                 do_sample=True,
-                top_p=0.9,
+                top_p=0.85,  # More conservative sampling
+                repetition_penalty=1.2,  # Discourage repetition
                 num_return_sequences=1
             )
 
@@ -292,6 +486,13 @@ CONVERSATION HISTORY:
             for marker in end_markers:
                 if marker in generated_text:
                     generated_text = generated_text.split(marker)[0].strip()
+
+            # Hallucination check - only if strict knowledge mode is on
+            if self.strict_knowledge:
+                # If response contains hallucinated information, replace with uncertainty response
+                if not self._is_response_grounded(generated_text, context):
+                    print("Detected potential hallucination - replacing response")
+                    return self._get_uncertainty_response()
 
             return generated_text
 

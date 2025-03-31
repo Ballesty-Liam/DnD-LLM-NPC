@@ -158,7 +158,8 @@ def chat_with_npc(
         persona_file: Optional[str] = typer.Option(None, help="Path to character persona JSON file"),
         save_history: bool = typer.Option(True, help="Save chat history to file"),
         history_file: str = typer.Option("chat_history.json", help="File to save chat history"),
-        force_gpu: bool = typer.Option(False, help="Force GPU acceleration")
+        force_gpu: bool = typer.Option(False, help="Force GPU acceleration"),
+        strict_knowledge: bool = typer.Option(True, help="Strictly enforce knowledge limitations")
 ):
     """Interactive chat with Thallan, the Radiant Citadel NPC."""
     global character, chat_history
@@ -176,6 +177,12 @@ def chat_with_npc(
             console.print("[system]pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121[/system]")
             return
 
+    # Show anti-hallucination status
+    if strict_knowledge:
+        console.print("[system]Anti-hallucination system enabled - Thallan will only use information from the source material[/system]")
+    else:
+        console.print("[system]WARNING: Anti-hallucination system disabled - Thallan may invent information not in source material[/system]")
+
     # Initialize character
     console.print(f"[system]Initializing Thallan with model {model_path}...[/system]")
     try:
@@ -183,7 +190,8 @@ def chat_with_npc(
             name="Thallan",
             persona_file=persona_file,
             model_path=model_path,
-            force_gpu=force_gpu
+            force_gpu=force_gpu,
+            strict_knowledge=strict_knowledge
         )
     except Exception as e:
         console.print(f"[error]Error initializing model: {e}[/error]")
@@ -216,6 +224,25 @@ def chat_with_npc(
             if user_input.lower() in ("exit", "quit", "bye", "/quit", "/exit"):
                 console.print("[npc]Farewell, traveler! May the light of the Citadel guide your path.[/npc]")
                 break
+
+            # Add commands for controlling the anti-hallucination system
+            if user_input.lower() == "/strict on":
+                character.strict_knowledge = True
+                console.print("[system]Anti-hallucination system enabled[/system]")
+                continue
+
+            if user_input.lower() == "/strict off":
+                character.strict_knowledge = False
+                console.print("[system]Anti-hallucination system disabled[/system]")
+                continue
+
+            if user_input.lower() == "/help":
+                console.print("[system]Available commands:[/system]")
+                console.print("[system]  /strict on - Enable anti-hallucination system[/system]")
+                console.print("[system]  /strict off - Disable anti-hallucination system[/system]")
+                console.print("[system]  /quit or /exit - End the conversation[/system]")
+                console.print("[system]  /help - Show this help message[/system]")
+                continue
 
             # Generate response
             with console.status("[system]Thallan is thinking...[/system]"):

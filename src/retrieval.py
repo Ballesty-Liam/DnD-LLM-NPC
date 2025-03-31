@@ -1,131 +1,159 @@
 """
-Handle semantic search and retrieval of relevant D&D lore.
+Retrieve relevant D&D lore for answering user queries.
 """
-from typing import List, Dict, Any, Optional
+import os
+from typing import Dict, List, Any, Optional
 
 from .embeddings import EmbeddingManager
 
 
 class LoreRetriever:
-    """Retrieve relevant D&D lore based on semantic similarity."""
+    """Retrieve relevant lore from D&D sourcebooks."""
 
     def __init__(
-            self,
-            embedding_manager: Optional[EmbeddingManager] = None,
-            default_n_results: int = 5
+        self,
+        results_count: int = 5,
+        embeddings_dir: str = "data/processed"
     ):
         """
         Initialize the lore retriever.
 
         Args:
-            embedding_manager: Manager for embeddings and vector search
-            default_n_results: Default number of results to retrieve
+            results_count: Number of results to return for each query
+            embeddings_dir: Directory where embeddings are stored
         """
-        self.embedding_manager = embedding_manager or EmbeddingManager()
-        self.default_n_results = default_n_results
+        self.results_count = results_count
+        self.embeddings_dir = embeddings_dir
 
-    def retrieve(
-            self,
-            query: str,
-            n_results: Optional[int] = None,
-            where_filter: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
+        # Initialize embedding manager
+        self.embedding_manager = self._init_embeddings()
+
+    def _init_embeddings(self) -> Optional[EmbeddingManager]:
         """
-        Retrieve relevant lore based on the query.
-
-        Args:
-            query: The query text
-            n_results: Number of results to return
-            where_filter: Optional filter for metadata
+        Initialize the embedding manager if data exists.
 
         Returns:
-            List of relevant lore passages with metadata
+            Initialized EmbeddingManager or None
         """
-        n = n_results or self.default_n_results
+        # Check if embeddings exist
+        expected_files = [
+            "radiant_citadel.faiss",
+            "radiant_citadel_metadata.pkl",
+            "radiant_citadel_documents.pkl"
+        ]
 
-        # Query the vector database
-        results = self.embedding_manager.query(
-            query_text=query,
-            n_results=n,
-            where_filter=where_filter
+        embeddings_exist = all(
+            os.path.exists(os.path.join(self.embeddings_dir, f))
+            for f in expected_files
         )
 
-        # Format the results
-        formatted_results = []
-        for i in range(len(results["documents"][0])):
-            formatted_results.append({
-                "content": results["documents"][0][i],
-                "metadata": results["metadatas"][0][i] if i < len(results["metadatas"][0]) else {},
-                "score": results["distances"][0][i] if i < len(results["distances"][0]) else None
-            })
+        if embeddings_exist:
+            return EmbeddingManager(processed_dir=self.embeddings_dir)
+        else:
+            print(f"No embeddings found at {self.embeddings_dir}. Cannot retrieve lore.")
+            return None
 
-        return formatted_results
-
-    def get_condensed_context(
-            self,
-            query: str,
-            n_results: Optional[int] = None,
-            where_filter: Optional[Dict[str, Any]] = None,
-            max_tokens: int = 2000
-    ) -> str:
+    def query_lore(self, query_text: str, n_results: Optional[int] = None) -> Dict[str, Any]:
         """
-        Get condensed context relevant to the query.
+        Query the vector database to find relevant passages.
 
         Args:
-            query: The query text
-            n_results: Number of results to retrieve
-            where_filter: Optional filter for metadata
-            max_tokens: Maximum tokens to include in context
+            query_text: The query text
+            n_results: Number of results to return
 
         Returns:
-            String with concatenated relevant passages
+            Query results dictionary
         """
-        results = self.retrieve(query, n_results, where_filter)
+        if not self.embedding_manager:
+            return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
-        # Format as a single context string
-        context_parts = []
-        current_length = 0
-        target_length = max_tokens * 4  # Approximate chars to tokens
+        n_results = n_results or self.results_count
+        return self.embedding_manager.query(query_text, n_results=n_results)
 
-        for result in results:
-            content = result["content"]
-            metadata = result["metadata"]
+    def get_condensed_context(self, query_text: str, detailed: bool = False) -> str:
+        """
+        Get a condensed context from multiple relevant chunks.
 
-            # Format with source information
-            source_info = f"[Source: {metadata.get('title', 'Unknown')}]"
-            if "section" in metadata:
-                source_info += f", Section: {metadata['section']}"
+        Args:
+            query_text: The query text
+            detailed: Whether to include more detailed results
 
-            formatted_text = f"{content}\n{source_info}\n\n"
+        Returns:
+            Condensed context text
+        """
+        # Use more results when detailed is requested
+        n_results = self.results_count * 2 if detailed else self.results_count
 
-            # Add if we're under the limit
-            if current_length + len(formatted_text) <= target_length:
-                context_parts.append(formatted_text)
-                current_length += len(formatted_text)
-            else:
-                # Truncate the last part if needed
-                remaining = target_length - current_length
-                if remaining > 100:  # Only add if a meaningful amount can be included
-                    truncated = formatted_text[:remaining] + "...\n"
-                    context_parts.append(truncated)
-                break
+        # Expand query with related terms to improve retrieval
+        expanded_query = self._expand_query(query_text)
 
-        return "".join(context_parts)
+        # Get results for both original and expanded queries
+        original_results = self.query_lore(query_text, n_results)
+        expanded_results = self.query_lore(expanded_query, n_results)
 
+        # Combine and deduplicate results
+        combined_documents = []
+        seen_docs = set()
 
-if __name__ == "__main__":
-    # Example usage
-    retriever = LoreRetriever()
-    results = retriever.retrieve("Tell me about the Dawn Incarnates")
+        # Add original results first (higher priority)
+        for doc in original_results["documents"][0]:
+            if doc not in seen_docs:
+                combined_documents.append(doc)
+                seen_docs.add(doc)
 
-    for i, result in enumerate(results):
-        print(f"Result {i + 1}:")
-        print(f"Content: {result['content'][:100]}...")
-        print(f"Source: {result['metadata'].get('title', 'Unknown')}")
-        print(f"Score: {result['score']}")
-        print()
+        # Add expanded results if not already included
+        for doc in expanded_results["documents"][0]:
+            if doc not in seen_docs:
+                combined_documents.append(doc)
+                seen_docs.add(doc)
 
-    # Get condensed context
-    context = retriever.get_condensed_context("What is the history of the Radiant Citadel?")
-    print("Condensed Context:")
-    print(context[:500] + "...\n")
+        # Limit to reasonable size
+        max_docs = n_results * 2
+        combined_documents = combined_documents[:max_docs]
+
+        # Format context with document separation for clarity
+        if not combined_documents:
+            return "No relevant information found in the Radiant Citadel records."
+
+        # Format with clear section separators
+        context_sections = []
+
+        for i, doc in enumerate(combined_documents):
+            section_title = f"KNOWLEDGE SECTION {i+1}"
+            context_sections.append(f"{section_title}:\n{doc.strip()}")
+
+        return "\n\n".join(context_sections)
+
+    def _expand_query(self, query_text: str) -> str:
+        """
+        Expand query with D&D related terms to improve retrieval.
+
+        Args:
+            query_text: Original query text
+
+        Returns:
+            Expanded query text
+        """
+        # Extract key terms from query
+        import re
+        words = re.findall(r'\b[A-Za-z]+\b', query_text)
+
+        # Only add D&D related terms if they seem relevant to the query
+        dnd_terms = []
+
+        if any(term in query_text.lower() for term in ["citadel", "radiant", "city"]):
+            dnd_terms.extend(["Radiant Citadel", "Dawn Incarnates", "Concord"])
+
+        if any(term in query_text.lower() for term in ["market", "shop", "buy", "sell", "trade"]):
+            dnd_terms.extend(["Amaranthine Market", "merchants", "goods"])
+
+        if any(term in query_text.lower() for term in ["founder", "history", "ancient", "origin"]):
+            dnd_terms.extend(["Founders", "Dawn Incarnates", "histories"])
+
+        # Only add expansion if we found relevant terms
+        if dnd_terms:
+            expanded = f"{query_text} {' '.join(dnd_terms)}"
+            print(f"Expanded query: {expanded}")
+            return expanded
+
+        return query_text
