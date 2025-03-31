@@ -9,7 +9,10 @@ from typing import List, Dict, Any, Optional, Union
 
 import numpy as np
 import faiss
+import torch
 from sentence_transformers import SentenceTransformer
+
+from .utils import get_optimal_device
 
 
 class EmbeddingManager:
@@ -17,9 +20,10 @@ class EmbeddingManager:
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",  # Lightweight model, works without GPU
+        model_name: str = "all-MiniLM-L6-v2",
         processed_dir: str = "data/processed",
-        index_name: str = "radiant_citadel"
+        index_name: str = "radiant_citadel",
+        batch_size: int = 32
     ):
         """
         Initialize the embedding manager.
@@ -28,16 +32,22 @@ class EmbeddingManager:
             model_name: Name of the sentence-transformers model to use
             processed_dir: Directory with processed text chunks
             index_name: Name for the FAISS index
+            batch_size: Batch size for embedding generation
         """
         self.model_name = model_name
         self.processed_dir = Path(processed_dir)
         self.index_name = index_name
+        self.batch_size = batch_size
 
         # Ensure directory exists
         self.processed_dir.mkdir(parents=True, exist_ok=True)
 
+        # Get optimal device
+        self.device = get_optimal_device()
+        print(f"Using device for embeddings: {self.device}")
+
         # Initialize sentence transformer model
-        self.model = SentenceTransformer(model_name)
+        self.model = SentenceTransformer(model_name, device=self.device.type)
 
         # Path to save the index
         self.index_path = self.processed_dir / f"{index_name}.faiss"
@@ -48,6 +58,13 @@ class EmbeddingManager:
         if os.path.exists(self.index_path) and os.path.exists(self.metadata_path):
             self.index = faiss.read_index(str(self.index_path))
 
+            # Add GPU support to FAISS if available
+            if self.device.type == "cuda":
+                # Use GPU for faster search
+                res = faiss.StandardGpuResources()
+                self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
+                print("Using GPU acceleration for FAISS")
+
             with open(self.metadata_path, 'rb') as f:
                 self.metadata = pickle.load(f)
 
@@ -57,7 +74,15 @@ class EmbeddingManager:
             print(f"Loaded existing index '{index_name}' with {len(self.metadata)} documents")
         else:
             # Create a new index
-            self.index = faiss.IndexFlatL2(self.model.get_sentence_embedding_dimension())
+            embedding_dim = self.model.get_sentence_embedding_dimension()
+            self.index = faiss.IndexFlatL2(embedding_dim)
+
+            # Add GPU support if available
+            if self.device.type == "cuda":
+                res = faiss.StandardGpuResources()
+                self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
+                print("Using GPU acceleration for FAISS")
+
             self.metadata = []
             self.documents = []
             print(f"Created new index '{index_name}'")
@@ -78,6 +103,31 @@ class EmbeddingManager:
                 documents.append(json.loads(line))
         return documents
 
+    def _create_embeddings_batched(self, texts: List[str]) -> np.ndarray:
+        """
+        Create embeddings in batches to better utilize GPU memory.
+
+        Args:
+            texts: List of text strings to embed
+
+        Returns:
+            Array of embeddings
+        """
+        all_embeddings = []
+
+        # Process in batches
+        for i in range(0, len(texts), self.batch_size):
+            batch = texts[i:i+self.batch_size]
+            batch_embeddings = self.model.encode(
+                batch,
+                show_progress_bar=True,
+                convert_to_numpy=True
+            )
+            all_embeddings.append(batch_embeddings)
+
+        # Combine all batches
+        return np.vstack(all_embeddings).astype('float32')
+
     def add_documents(self, documents: List[Dict[str, Any]]):
         """
         Add documents to the vector database.
@@ -89,12 +139,18 @@ class EmbeddingManager:
         texts = [doc["content"] for doc in documents]
         metadatas = [doc["metadata"] for doc in documents]
 
-        # Create embeddings
-        embeddings = self.model.encode(texts, show_progress_bar=True)
+        # Create embeddings (batched for GPU efficiency)
+        embeddings = self._create_embeddings_batched(texts)
 
         # Add to FAISS index
         start_idx = len(self.metadata)
-        self.index.add(np.array(embeddings).astype('float32'))
+        self.index.add(embeddings)
+
+        # Convert index back to CPU for saving
+        if self.device.type == "cuda":
+            cpu_index = faiss.index_gpu_to_cpu(self.index)
+        else:
+            cpu_index = self.index
 
         # Store metadata and documents
         for i, (text, meta) in enumerate(zip(texts, metadatas)):
@@ -105,7 +161,7 @@ class EmbeddingManager:
             self.documents.append(text)
 
         # Save index and metadata
-        faiss.write_index(self.index, str(self.index_path))
+        faiss.write_index(cpu_index, str(self.index_path))
 
         with open(self.metadata_path, 'wb') as f:
             pickle.dump(self.metadata, f)

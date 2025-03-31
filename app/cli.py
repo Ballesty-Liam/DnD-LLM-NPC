@@ -13,6 +13,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.theme import Theme
+from rich.table import Table
 
 # Add parent directory to path to allow imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.character import CharacterPersona
 from src.data_processing import SourceProcessor
 from src.embeddings import EmbeddingManager
+from src.utils import get_recommended_models, get_optimal_device
 
 # Set up Rich theming
 custom_theme = Theme({
@@ -66,9 +68,51 @@ def create_embeddings(
     console.print(f"[system]✓ Created embeddings using {model_name}[/system]")
 
 
+@app.command("models")
+def list_models():
+    """List recommended open-access models."""
+    models = get_recommended_models()
+
+    console.print("[system]Recommended open-access models for Thallan NPC:[/system]")
+
+    # Get device info
+    device = get_optimal_device()
+    device_info = f"Currently using: {device.type}"
+    if device.type == "cuda":
+        device_info += f" ({torch.cuda.get_device_name(0)})"
+
+    console.print(f"[system]{device_info}[/system]")
+
+    for category, model_list in models.items():
+        table = Table(title=category)
+        table.add_column("Model Name", style="cyan")
+        table.add_column("Description", style="green")
+
+        for model in model_list:
+            description = ""
+            if "tinyllama" in model.lower():
+                description = "Small (1.1B) but efficient model, great compatibility"
+            elif "phi" in model.lower():
+                description = "Microsoft's small but capable model, excellent on lower-end hardware"
+            elif "gemma" in model.lower():
+                description = "Google's lightweight model, good for most hardware"
+            elif "stable" in model.lower():
+                description = "Stability AI's model with good instruction following"
+            elif "nous" in model.lower():
+                description = "High-quality but requires significant GPU memory"
+
+            table.add_row(model, description)
+
+        console.print(table)
+        console.print()
+
+    console.print("[system]Usage: python app/cli.py chat --model-path MODEL_NAME[/system]")
+    console.print("[system]Example: python app/cli.py chat --model-path microsoft/phi-2[/system]")
+
+
 @app.command("chat")
 def chat_with_npc(
-        model_path: Optional[str] = typer.Option(None, help="Path to LLM model file"),
+        model_path: str = typer.Option("microsoft/phi-2", help="Path or name of LLM model"),
         persona_file: Optional[str] = typer.Option(None, help="Path to character persona JSON file"),
         save_history: bool = typer.Option(True, help="Save chat history to file"),
         history_file: str = typer.Option("chat_history.json", help="File to save chat history")
@@ -77,12 +121,17 @@ def chat_with_npc(
     global character, chat_history
 
     # Initialize character
-    console.print("[system]Initializing Thallan...[/system]")
-    character = CharacterPersona(
-        name="Thallan",
-        persona_file=persona_file,
-        model_path=model_path
-    )
+    console.print(f"[system]Initializing Thallan with model {model_path}...[/system]")
+    try:
+        character = CharacterPersona(
+            name="Thallan",
+            persona_file=persona_file,
+            model_path=model_path
+        )
+    except Exception as e:
+        console.print(f"[error]Error initializing model: {e}[/error]")
+        console.print("[system]Try running 'python app/cli.py models' to see compatible models[/system]")
+        return
 
     # Load existing chat history if available
     if save_history and os.path.exists(history_file):
