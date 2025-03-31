@@ -1,6 +1,6 @@
 # Thallan: D&D NPC AI Assistant
 
-![Radiant Citadel](https://i.imgur.com/eogcQkr.jpg)
+![image](https://github.com/user-attachments/assets/4c1443c1-aa75-4a20-9acd-d2665d682a33)
 
 ## Project Overview
 
@@ -21,7 +21,8 @@ This project demonstrates several key AI and NLP techniques:
 
 ## 🎮 Demo
 
-![Thallan CLI Demo](https://i.imgur.com/abc123.gif)
+![image](https://github.com/user-attachments/assets/cf1dbd20-0de1-40ec-91fb-26c614bc2abd)
+
 
 ## 🏗️ Technical Architecture
 
