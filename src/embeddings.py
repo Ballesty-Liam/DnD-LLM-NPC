@@ -38,6 +38,7 @@ class EmbeddingManager:
         self.processed_dir = Path(processed_dir)
         self.index_name = index_name
         self.batch_size = batch_size
+        self.use_gpu = False  # Default to not using GPU for FAISS
 
         # Ensure directory exists
         self.processed_dir.mkdir(parents=True, exist_ok=True)
@@ -54,16 +55,30 @@ class EmbeddingManager:
         self.metadata_path = self.processed_dir / f"{index_name}_metadata.pkl"
         self.documents_path = self.processed_dir / f"{index_name}_documents.pkl"
 
+        # Check for FAISS-GPU
+        if self.device.type == "cuda":
+            try:
+                # Try importing the GPU version of FAISS
+                import faiss.contrib.torch_utils
+                self.use_gpu = True
+                print("FAISS GPU support available and enabled")
+            except (ImportError, AttributeError):
+                print("FAISS GPU support not available, using CPU version")
+                print("To enable GPU support for FAISS, install with: pip install faiss-gpu")
+                self.use_gpu = False
+
         # Initialize or load index
         if os.path.exists(self.index_path) and os.path.exists(self.metadata_path):
             self.index = faiss.read_index(str(self.index_path))
 
-            # Add GPU support to FAISS if available
-            if self.device.type == "cuda":
-                # Use GPU for faster search
-                res = faiss.StandardGpuResources()
-                self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
-                print("Using GPU acceleration for FAISS")
+            # Try to use GPU for FAISS if available
+            if self.use_gpu:
+                try:
+                    # Use Pytorch/CUDA tensors with FAISS
+                    faiss.contrib.torch_utils.using_torch_tensors()
+                    print("Using PyTorch tensors with FAISS")
+                except Exception as e:
+                    print(f"Could not initialize FAISS with PyTorch tensors: {e}")
 
             with open(self.metadata_path, 'rb') as f:
                 self.metadata = pickle.load(f)
@@ -77,11 +92,14 @@ class EmbeddingManager:
             embedding_dim = self.model.get_sentence_embedding_dimension()
             self.index = faiss.IndexFlatL2(embedding_dim)
 
-            # Add GPU support if available
-            if self.device.type == "cuda":
-                res = faiss.StandardGpuResources()
-                self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
-                print("Using GPU acceleration for FAISS")
+            # Try to use GPU for FAISS if available
+            if self.use_gpu:
+                try:
+                    # Use Pytorch/CUDA tensors with FAISS
+                    faiss.contrib.torch_utils.using_torch_tensors()
+                    print("Using PyTorch tensors with FAISS")
+                except Exception as e:
+                    print(f"Could not initialize FAISS with PyTorch tensors: {e}")
 
             self.metadata = []
             self.documents = []
@@ -146,12 +164,6 @@ class EmbeddingManager:
         start_idx = len(self.metadata)
         self.index.add(embeddings)
 
-        # Convert index back to CPU for saving
-        if self.device.type == "cuda":
-            cpu_index = faiss.index_gpu_to_cpu(self.index)
-        else:
-            cpu_index = self.index
-
         # Store metadata and documents
         for i, (text, meta) in enumerate(zip(texts, metadatas)):
             self.metadata.append({
@@ -161,7 +173,7 @@ class EmbeddingManager:
             self.documents.append(text)
 
         # Save index and metadata
-        faiss.write_index(cpu_index, str(self.index_path))
+        faiss.write_index(self.index, str(self.index_path))
 
         with open(self.metadata_path, 'wb') as f:
             pickle.dump(self.metadata, f)

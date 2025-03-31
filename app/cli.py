@@ -116,6 +116,8 @@ def gpu_info():
     """Display detailed GPU information."""
     if not torch.cuda.is_available():
         console.print("[error]No CUDA-capable GPU detected[/error]")
+        console.print("[system]Check your PyTorch installation by running: pip list | findstr torch[/system]")
+        console.print("[system]If you see +cpu, reinstall with: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121[/system]")
         return
 
     console.print("[system]GPU Information:[/system]")
@@ -144,6 +146,11 @@ def gpu_info():
 
     console.print(table)
 
+    # Additional info about PyTorch
+    console.print("\n[system]PyTorch CUDA Information:[/system]")
+    console.print(f"PyTorch version: {torch.__version__}")
+    console.print(f"CUDA version: {torch.version.cuda}")
+
 
 @app.command("chat")
 def chat_with_npc(
@@ -151,7 +158,7 @@ def chat_with_npc(
         persona_file: Optional[str] = typer.Option(None, help="Path to character persona JSON file"),
         save_history: bool = typer.Option(True, help="Save chat history to file"),
         history_file: str = typer.Option("chat_history.json", help="File to save chat history"),
-        force_gpu: bool = typer.Option(False, help="Force model to load on GPU")
+        force_gpu: bool = typer.Option(False, help="Force GPU acceleration")
 ):
     """Interactive chat with Thallan, the Radiant Citadel NPC."""
     global character, chat_history
@@ -159,12 +166,14 @@ def chat_with_npc(
     # Show GPU info if forcing GPU
     if force_gpu:
         if torch.cuda.is_available():
-            console.print(f"[system]Forcing GPU usage: {torch.cuda.get_device_name(0)}[/system]")
+            console.print(f"[system]GPU acceleration enabled: {torch.cuda.get_device_name(0)}[/system]")
             # Clear CUDA cache
             torch.cuda.empty_cache()
             console.print(f"[system]Cleared GPU cache[/system]")
         else:
-            console.print("[error]Cannot force GPU: No CUDA-capable GPU detected[/error]")
+            console.print("[error]Cannot use GPU: No CUDA-capable GPU detected[/error]")
+            console.print("[system]Make sure you have PyTorch with CUDA installed:[/system]")
+            console.print("[system]pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121[/system]")
             return
 
     # Initialize character

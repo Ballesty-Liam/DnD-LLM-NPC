@@ -72,9 +72,9 @@ class CharacterPersona:
 
         # Force GPU if available and requested
         if force_gpu and torch.cuda.is_available():
-            print("Forcing GPU usage")
+            print("GPU acceleration enabled")
             torch.cuda.empty_cache()  # Clear GPU memory
-            self.device = torch.device("cuda:0")  # Explicitly set to first GPU
+            # We won't explicitly set device since we'll use device_map="auto"
 
         # Initialize model
         self.model_name = model_path or "microsoft/phi-2"
@@ -123,52 +123,28 @@ class CharacterPersona:
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load model with explicit GPU handling
+        # Load model with GPU acceleration via device_map="auto"
         try:
             print(f"Loading model from {self.model_name}...")
 
-            # For OpenLLaMA specifically, use different loading strategy if needed
-            if "open_llama" in self.model_name.lower() and self.device.type == "cuda":
-                print("Using special loading strategy for OpenLLaMA on GPU")
-                # First load in CPU then move to GPU for more control
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True,
-                    trust_remote_code=True
-                ).to(self.device)  # Explicitly move to GPU
-            else:
-                # Standard loading with device_map
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name,
-                    quantization_config=quantization_config,
-                    device_map="auto" if self.device.type == "cuda" else None,
-                    torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
-                    low_cpu_mem_usage=True,
-                    trust_remote_code=True
-                )
+            # Let accelerate handle device placement with device_map="auto"
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                quantization_config=quantization_config,
+                device_map="auto",  # This handles GPU placement automatically
+                torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
+                low_cpu_mem_usage=True,
+                trust_remote_code=True
+            )
 
-                # If device_map="auto" didn't put it on GPU, force it
-                if self.device.type == "cuda" and not next(self.model.parameters()).is_cuda:
-                    print("Model not on GPU after loading with device_map='auto', forcing...")
-                    self.model = self.model.to(self.device)
-
-            # Check actual device placement
-            model_device = next(self.model.parameters()).device
-            print(f"Model loaded on: {model_device}")
-
-            # If requested GPU but model is on CPU, something went wrong
-            if self.device.type == "cuda" and model_device.type != "cuda":
-                print("WARNING: Model still on CPU despite GPU being available")
-                print("Trying one more time to force GPU placement...")
-                self.model = self.model.to(self.device)
-                model_device = next(self.model.parameters()).device
-                print(f"After forcing, model on: {model_device}")
-
-            # Print memory usage
+            # Check if model is using GPU
             if self.device.type == "cuda":
-                print(f"GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-                print(f"GPU memory reserved: {torch.cuda.memory_reserved()/1e9:.2f} GB")
+                # Check if any parameter is on CUDA
+                is_on_gpu = any(p.is_cuda for p in self.model.parameters())
+                if is_on_gpu:
+                    print("Model successfully loaded on GPU")
+                else:
+                    print("Warning: Model parameters not on GPU despite CUDA being available")
 
             # Get parameter count
             param_count = sum(p.numel() for p in self.model.parameters())
@@ -180,18 +156,29 @@ class CharacterPersona:
             self.model_name = "microsoft/phi-2"
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                device_map="auto" if self.device.type == "cuda" else None,
+                device_map="auto",
                 torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
                 low_cpu_mem_usage=True
             )
 
-        # Create text generation pipeline
-        self.llm = TextGenerationPipeline(
-            model=self.model,
-            tokenizer=self.tokenizer,
-            return_full_text=False,
-            device=0 if self.device.type == "cuda" else -1  # Explicitly set pipeline device
-        )
+        # Create text generation pipeline WITHOUT specifying device (let accelerate handle it)
+        try:
+            self.llm = TextGenerationPipeline(
+                model=self.model,
+                tokenizer=self.tokenizer,
+                return_full_text=False
+                # Do not specify device here - this was causing the error
+            )
+            print("Successfully created text generation pipeline")
+        except Exception as e:
+            print(f"Error creating pipeline: {e}")
+            # Try an alternative approach
+            self.llm = TextGenerationPipeline(
+                model=self.model,
+                tokenizer=self.tokenizer,
+                return_full_text=False,
+                device_map="auto"  # Use device_map instead of device
+            )
 
         # Set up retriever
         self.retriever = LoreRetriever()
@@ -278,27 +265,12 @@ CONVERSATION HISTORY:
         # Build the prompt
         prompt = self._build_prompt(user_input, chat_history)
 
-        # Check if model is on correct device
-        model_device = next(self.model.parameters()).device
-        if self.device.type == "cuda" and model_device.type != "cuda":
-            print(f"WARNING: Model on {model_device} but should be on {self.device}")
-            print("Moving model to GPU...")
-            self.model = self.model.to(self.device)
-
-            # Recreate pipeline with correct device
-            self.llm = TextGenerationPipeline(
-                model=self.model,
-                tokenizer=self.tokenizer,
-                return_full_text=False,
-                device=0 if self.device.type == "cuda" else -1
-            )
+        # Log GPU info if available
+        if torch.cuda.is_available():
+            print(f"GPU memory before generation: {torch.cuda.memory_allocated()/1e9:.2f} GB")
 
         # Generate response
         try:
-            # Log memory status before generation
-            if self.device.type == "cuda":
-                print(f"GPU memory before generation: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-
             response = self.llm(
                 prompt,
                 max_new_tokens=max_tokens,
@@ -308,8 +280,8 @@ CONVERSATION HISTORY:
                 num_return_sequences=1
             )
 
-            # Log memory status after generation
-            if self.device.type == "cuda":
+            # Log GPU info if available
+            if torch.cuda.is_available():
                 print(f"GPU memory after generation: {torch.cuda.memory_allocated()/1e9:.2f} GB")
 
             # Extract generated text
