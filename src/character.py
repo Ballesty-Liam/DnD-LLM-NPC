@@ -20,7 +20,8 @@ class CharacterPersona:
         self,
         name: str = "Thallan",
         persona_file: Optional[str] = None,
-        model_path: Optional[str] = None
+        model_path: Optional[str] = None,
+        force_gpu: bool = True
     ):
         """
         Initialize the character persona.
@@ -29,6 +30,7 @@ class CharacterPersona:
             name: Character name
             persona_file: Path to JSON file with character details
             model_path: Path to LLM model or model identifier
+            force_gpu: Whether to force GPU usage
         """
         self.name = name
 
@@ -68,19 +70,31 @@ class CharacterPersona:
         self.device = get_optimal_device()
         print(f"Using device: {self.device}")
 
+        # Force GPU if available and requested
+        if force_gpu and torch.cuda.is_available():
+            print("Forcing GPU usage")
+            torch.cuda.empty_cache()  # Clear GPU memory
+            self.device = torch.device("cuda:0")  # Explicitly set to first GPU
+
         # Initialize model
-        self.model_name = model_path or "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+        self.model_name = model_path or "microsoft/phi-2"
 
         # Configure quantization for optimal GPU performance
         quantization_config = None
         if self.device.type == "cuda":
-            # 4-bit quantization for faster inference and lower memory usage
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True
-            )
+            # Try to use 4-bit quantization
+            try:
+                import bitsandbytes as bnb
+                print(f"Using bitsandbytes for quantization (version {bnb.__version__})")
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True
+                )
+            except ImportError:
+                print("bitsandbytes not available, using 16-bit precision instead")
+                # Will use torch.float16 without quantization
 
         print(f"Loading model: {self.model_name}")
 
@@ -109,20 +123,52 @@ class CharacterPersona:
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load model with quantization if on GPU
+        # Load model with explicit GPU handling
         try:
             print(f"Loading model from {self.model_name}...")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                quantization_config=quantization_config,
-                device_map="auto",
-                torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True
-            )
 
-            print(f"Model loaded successfully on {next(self.model.parameters()).device}")
-            print(f"Model type: {type(self.model).__name__}")
+            # For OpenLLaMA specifically, use different loading strategy if needed
+            if "open_llama" in self.model_name.lower() and self.device.type == "cuda":
+                print("Using special loading strategy for OpenLLaMA on GPU")
+                # First load in CPU then move to GPU for more control
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.float16,
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True
+                ).to(self.device)  # Explicitly move to GPU
+            else:
+                # Standard loading with device_map
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto" if self.device.type == "cuda" else None,
+                    torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True
+                )
+
+                # If device_map="auto" didn't put it on GPU, force it
+                if self.device.type == "cuda" and not next(self.model.parameters()).is_cuda:
+                    print("Model not on GPU after loading with device_map='auto', forcing...")
+                    self.model = self.model.to(self.device)
+
+            # Check actual device placement
+            model_device = next(self.model.parameters()).device
+            print(f"Model loaded on: {model_device}")
+
+            # If requested GPU but model is on CPU, something went wrong
+            if self.device.type == "cuda" and model_device.type != "cuda":
+                print("WARNING: Model still on CPU despite GPU being available")
+                print("Trying one more time to force GPU placement...")
+                self.model = self.model.to(self.device)
+                model_device = next(self.model.parameters()).device
+                print(f"After forcing, model on: {model_device}")
+
+            # Print memory usage
+            if self.device.type == "cuda":
+                print(f"GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+                print(f"GPU memory reserved: {torch.cuda.memory_reserved()/1e9:.2f} GB")
 
             # Get parameter count
             param_count = sum(p.numel() for p in self.model.parameters())
@@ -134,7 +180,7 @@ class CharacterPersona:
             self.model_name = "microsoft/phi-2"
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                device_map="auto",
+                device_map="auto" if self.device.type == "cuda" else None,
                 torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
                 low_cpu_mem_usage=True
             )
@@ -143,7 +189,8 @@ class CharacterPersona:
         self.llm = TextGenerationPipeline(
             model=self.model,
             tokenizer=self.tokenizer,
-            return_full_text=False
+            return_full_text=False,
+            device=0 if self.device.type == "cuda" else -1  # Explicitly set pipeline device
         )
 
         # Set up retriever
@@ -231,8 +278,27 @@ CONVERSATION HISTORY:
         # Build the prompt
         prompt = self._build_prompt(user_input, chat_history)
 
+        # Check if model is on correct device
+        model_device = next(self.model.parameters()).device
+        if self.device.type == "cuda" and model_device.type != "cuda":
+            print(f"WARNING: Model on {model_device} but should be on {self.device}")
+            print("Moving model to GPU...")
+            self.model = self.model.to(self.device)
+
+            # Recreate pipeline with correct device
+            self.llm = TextGenerationPipeline(
+                model=self.model,
+                tokenizer=self.tokenizer,
+                return_full_text=False,
+                device=0 if self.device.type == "cuda" else -1
+            )
+
         # Generate response
         try:
+            # Log memory status before generation
+            if self.device.type == "cuda":
+                print(f"GPU memory before generation: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+
             response = self.llm(
                 prompt,
                 max_new_tokens=max_tokens,
@@ -241,6 +307,10 @@ CONVERSATION HISTORY:
                 top_p=0.9,
                 num_return_sequences=1
             )
+
+            # Log memory status after generation
+            if self.device.type == "cuda":
+                print(f"GPU memory after generation: {torch.cuda.memory_allocated()/1e9:.2f} GB")
 
             # Extract generated text
             generated_text = response[0]['generated_text'].strip()

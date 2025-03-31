@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.theme import Theme
 from rich.table import Table
+import torch
 
 # Add parent directory to path to allow imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -106,8 +107,42 @@ def list_models():
         console.print(table)
         console.print()
 
-    console.print("[system]Usage: python app/cli.py chat --model-path MODEL_NAME[/system]")
-    console.print("[system]Example: python app/cli.py chat --model-path microsoft/phi-2[/system]")
+    console.print("[system]Usage: python app/cli.py chat --model-path MODEL_NAME --force-gpu[/system]")
+    console.print("[system]Example: python app/cli.py chat --model-path microsoft/phi-2 --force-gpu[/system]")
+
+
+@app.command("gpu-info")
+def gpu_info():
+    """Display detailed GPU information."""
+    if not torch.cuda.is_available():
+        console.print("[error]No CUDA-capable GPU detected[/error]")
+        return
+
+    console.print("[system]GPU Information:[/system]")
+
+    table = Table(title="CUDA Device Information")
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="green")
+
+    device_count = torch.cuda.device_count()
+    current_device = torch.cuda.current_device()
+
+    table.add_row("CUDA Available", "Yes")
+    table.add_row("Device Count", str(device_count))
+    table.add_row("Current Device", str(current_device))
+    table.add_row("Device Name", torch.cuda.get_device_name(current_device))
+
+    props = torch.cuda.get_device_properties(current_device)
+    table.add_row("Compute Capability", f"{props.major}.{props.minor}")
+    table.add_row("Total Memory", f"{props.total_memory / 1e9:.2f} GB")
+    table.add_row("Multi-Processor Count", str(props.multi_processor_count))
+
+    # Memory information
+    table.add_row("Memory Allocated", f"{torch.cuda.memory_allocated() / 1e9:.2f} GB")
+    table.add_row("Memory Reserved", f"{torch.cuda.memory_reserved() / 1e9:.2f} GB")
+    table.add_row("Max Memory Allocated", f"{torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+
+    console.print(table)
 
 
 @app.command("chat")
@@ -115,10 +150,22 @@ def chat_with_npc(
         model_path: str = typer.Option("microsoft/phi-2", help="Path or name of LLM model"),
         persona_file: Optional[str] = typer.Option(None, help="Path to character persona JSON file"),
         save_history: bool = typer.Option(True, help="Save chat history to file"),
-        history_file: str = typer.Option("chat_history.json", help="File to save chat history")
+        history_file: str = typer.Option("chat_history.json", help="File to save chat history"),
+        force_gpu: bool = typer.Option(False, help="Force model to load on GPU")
 ):
     """Interactive chat with Thallan, the Radiant Citadel NPC."""
     global character, chat_history
+
+    # Show GPU info if forcing GPU
+    if force_gpu:
+        if torch.cuda.is_available():
+            console.print(f"[system]Forcing GPU usage: {torch.cuda.get_device_name(0)}[/system]")
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
+            console.print(f"[system]Cleared GPU cache[/system]")
+        else:
+            console.print("[error]Cannot force GPU: No CUDA-capable GPU detected[/error]")
+            return
 
     # Initialize character
     console.print(f"[system]Initializing Thallan with model {model_path}...[/system]")
@@ -126,7 +173,8 @@ def chat_with_npc(
         character = CharacterPersona(
             name="Thallan",
             persona_file=persona_file,
-            model_path=model_path
+            model_path=model_path,
+            force_gpu=force_gpu
         )
     except Exception as e:
         console.print(f"[error]Error initializing model: {e}[/error]")
