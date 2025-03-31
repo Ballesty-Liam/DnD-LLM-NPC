@@ -21,7 +21,7 @@ This project demonstrates several key AI and NLP techniques:
 
 ## 🎮 Demo
 
-![image](https://github.com/user-attachments/assets/cf1dbd20-0de1-40ec-91fb-26c614bc2abd)
+![image](https://github.com/user-attachments/assets/0f086fc4-960b-443d-9cca-e6018fc93eef)
 
 
 ## 🏗️ Technical Architecture
