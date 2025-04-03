@@ -1,6 +1,6 @@
 # Thallan: D&D NPC AI Assistant
 
-![image](https://github.com/user-attachments/assets/4c1443c1-aa75-4a20-9acd-d2665d682a33)
+![image](https://github.com/user-attachments/assets/f20f9a16-9455-4289-aa83-de719b033677)
 
 ## Project Overview
 
