@@ -69,8 +69,8 @@ This project demonstrates several key AI and NLP techniques:
 
 1. **Clone the repository**:
 ```bash
-git clone https://github.com/[YOUR_USERNAME]/thallan-radiant-citadel.git
-cd thallan-radiant-citadel
+git clone https://github.com/[YOUR_USERNAME]/DnD-LLM-NPC
+cd DnD-LLM-NPC
 ```
 
 2. **Create a virtual environment**:
