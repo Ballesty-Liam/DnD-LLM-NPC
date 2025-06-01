@@ -1,2 +1,15 @@
-name: LLM Agent Trust Verification
-uses: Ballesty-Liam/llm-security-action@v1.0.6
+name: LLM Agent Trust Verification            
+
+on: [push, pull_request]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # run your Action
+      - uses: Ballesty-Liam/llm-security-action@v1.0.6
+        # if you have a custom config file, add:
+        # with:
+        #   config: .github/llm-policy.yml
