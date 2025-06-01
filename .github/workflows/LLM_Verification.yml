@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # run your Action
-      - uses: Ballesty-Liam/llm-security-action@v1.0.6
+      - uses: Ballesty-Liam/llm-security-action@v1
         # if you have a custom config file, add:
         # with:
         #   config: .github/llm-policy.yml
