@@ -4,6 +4,8 @@
 
 ## Project Overview
 
+[![LLM Security](https://github.com/Ballesty-Liam/DnD-LLM-NPC/actions/workflows/llm-security-badge.yml/badge.svg)](https://github.com/Ballesty-Liam/DnD-LLM-NPC/actions/workflows/llm-security-badge.yml)
+
 Thallan is an AI-powered D&D NPC (Non-Player Character) from the Radiant Citadel. This project creates a conversational character that:
 
 - Responds to questions about D&D lore from the Radiant Citadel sourcebook
