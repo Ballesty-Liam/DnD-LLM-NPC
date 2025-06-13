@@ -13,5 +13,5 @@ jobs:
 
       # 2) Run the LLM security Action
       - name: LLM Policy Scan
-        uses: Ballesty-Liam/llm-security-action@Upgrading-Of-All-Policies
+        uses: Ballesty-Liam/llm-security-action@agent-verification-engine-feature
 
